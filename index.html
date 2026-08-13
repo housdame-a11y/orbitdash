@@ -137,6 +137,22 @@
     min-height:14px;
     text-shadow:0 0 10px var(--core-glow);
   }
+  .streakBar{
+    width:56px;
+    height:3px;
+    background:rgba(255,255,255,0.1);
+    border-radius:2px;
+    margin-top:6px;
+    margin-left:auto;
+    overflow:hidden;
+  }
+  .streakBarFill{
+    height:100%;
+    width:0%;
+    background:var(--ring-b);
+    border-radius:2px;
+  }
+  .streakBarFill.warn{ background:var(--danger); }
   .finalstreak{
     font-size:12px;
     font-weight:600;
@@ -261,6 +277,33 @@
   }
   .muteBtn:hover, .muteBtn:focus{ opacity:1; }
   .muteBtn.off{ color:var(--danger); }
+  .pauseBtn{
+    position:absolute;
+    top:20px;
+    right:58px;
+    width:30px;
+    height:30px;
+    border-radius:50%;
+    border:1.5px solid rgba(255,255,255,0.12);
+    background:rgba(255,255,255,0.05);
+    color:var(--ink-dim);
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    cursor:pointer;
+    z-index:12;
+    pointer-events:auto;
+    opacity:0;
+    transition:opacity 0.2s ease;
+  }
+  .pauseBtn.show{ opacity:0.65; }
+  .pauseBtn:hover, .pauseBtn:focus{ opacity:1; }
+  @keyframes streakPop{
+    0%{ transform:scale(1); }
+    35%{ transform:scale(1.35); }
+    100%{ transform:scale(1); }
+  }
+  #streakLive.pop{ animation:streakPop 0.28s ease; display:inline-block; }
   .btn:disabled{ opacity:0.45; cursor:default; }
 
   .chapterTag{
@@ -391,6 +434,12 @@
       <path id="muteSlash" d="M16 9L21 15M21 9L16 15" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" style="display:none"/>
     </svg>
   </button>
+  <button class="pauseBtn" id="pauseBtn" aria-label="Pause">
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <rect x="6" y="4" width="4" height="16" rx="1" fill="currentColor"/>
+      <rect x="14" y="4" width="4" height="16" rx="1" fill="currentColor"/>
+    </svg>
+  </button>
 
   <div class="hud" id="hud" style="opacity:0;">
     <div>
@@ -399,7 +448,9 @@
       <div class="powrow" id="powerRow"></div>
       <div class="chapterTag" id="chapterTag"></div>
     </div>
-    <div class="streak">STREAK<span id="streakLive">0</span><div class="mult" id="multLive"></div></div>
+    <div class="streak">STREAK<span id="streakLive">0</span><div class="mult" id="multLive"></div>
+      <div class="streakBar"><div class="streakBarFill" id="streakBarFill"></div></div>
+    </div>
   </div>
 
   <div class="overlay" id="startScreen">
@@ -410,7 +461,7 @@
       <button class="btn" id="startBtn" disabled>Start</button>
       <button class="btn ghost" id="logBtn" type="button">Log</button>
     </div>
-    <div class="hint">tap anywhere &middot; time your jump to the opening</div>
+    <div class="hint">tap anywhere &middot; chain jumps within 3s to build a streak</div>
   </div>
 
   <div class="overlay hidden" id="endScreen">
@@ -424,9 +475,17 @@
 
   <div class="overlay hidden" id="logScreen">
     <div class="title" style="font-size:28px;">SHIP'S LOG</div>
-    <div class="subtitle" style="margin-bottom:16px;">unlocked transmissions</div>
+    <div class="subtitle" id="logProgress" style="margin-bottom:16px;">unlocked transmissions</div>
     <div class="logList" id="logList"></div>
     <button class="btn ghost" id="logCloseBtn" type="button">Close</button>
+  </div>
+
+  <div class="overlay hidden" id="pauseScreen">
+    <div class="title" style="font-size:28px;">PAUSED</div>
+    <div class="btnRow" style="margin-top:10px;">
+      <button class="btn" id="resumeBtn" type="button">Resume</button>
+      <button class="btn ghost" id="quitBtn" type="button">Quit</button>
+    </div>
   </div>
 
   <div class="overlay hidden" id="countdownScreen">
@@ -442,6 +501,7 @@
   const scoreLive = document.getElementById('scoreLive');
   const bestLive = document.getElementById('bestLive');
   const streakLive = document.getElementById('streakLive');
+  const streakBarFill = document.getElementById('streakBarFill');
   const powerRow = document.getElementById('powerRow');
   const startScreen = document.getElementById('startScreen');
   const endScreen = document.getElementById('endScreen');
@@ -463,7 +523,12 @@
   const epilogueText = document.getElementById('epilogueText');
   const logBtn = document.getElementById('logBtn');
   const logScreen = document.getElementById('logScreen');
+  const pauseBtn = document.getElementById('pauseBtn');
+  const pauseScreen = document.getElementById('pauseScreen');
+  const resumeBtn = document.getElementById('resumeBtn');
+  const quitBtn = document.getElementById('quitBtn');
   const logList = document.getElementById('logList');
+  const logProgress = document.getElementById('logProgress');
   const logCloseBtn = document.getElementById('logCloseBtn');
 
   let W, H, DPR;
@@ -576,6 +641,8 @@
       storyFlashEl.style.opacity = '0';
     });
     shakeT = Math.max(shakeT, 0.1);
+    sfxChapter();
+    vibrate([15, 40, 15, 40]);
 
     if(!unlockedLore.includes(beat.id)){
       unlockedLore.push(beat.id);
@@ -610,6 +677,7 @@
       }
     }
     logList.innerHTML = html;
+    logProgress.textContent = `${unlockedLore.length}/${STORY_BEATS.length} transmissions unlocked`;
   }
   function epilogueFor(chapterNum){
     if(chapterNum <= 0){
@@ -630,6 +698,8 @@
   }
 
   let bestStreak = 0;
+  let bestStreakAtRunStart = 0;
+  let newBestAnnouncedThisRun = false;
   async function loadBestStreak(){
     try{
       const res = await window.storage.get('orbit_dash_best_streak', false);
@@ -676,6 +746,8 @@
   let cameraTarget = 0;
   let score = 0;
   let streak = 0;
+  const STREAK_WINDOW_MS = 3000;
+  let lastJumpTime = -Infinity;
   let particles = [];
   let popups = [];
   let stars = [];
@@ -692,6 +764,7 @@
     ringIndex: 0,
     transitioning: false,
     tFrom: 0, tTo: 0, tProg: 0, tDur: 0.16,
+    landT: 0,
     trail: []
   };
 
@@ -701,6 +774,20 @@
       r: Math.random()*1.4 + 0.3,
       phase: Math.random()*TAU,
       speed: 0.5 + Math.random()*1.2
+    });
+  }
+
+  // Slow-drifting nebula blobs behind the stars, for depth. Tinted by the
+  // current chapter's accent so the backdrop feels alive, not just the
+  // solid vignette.
+  let nebulae = [];
+  for(let i=0;i<5;i++){
+    nebulae.push({
+      x: Math.random(), y: Math.random(),
+      r: 0.18 + Math.random()*0.16,
+      driftX: (Math.random()-0.5)*0.01,
+      driftY: (Math.random()-0.5)*0.01,
+      phase: Math.random()*TAU
     });
   }
 
@@ -785,24 +872,15 @@
 
     const baseGapCenter = Math.random()*TAU;
 
-    // Pickups & hazards live inside the gap itself, so collecting one means
-    // actually landing the jump. Breather rings guarantee a pickup as a reward
-    // for surviving to that checkpoint; hazards only start appearing once the
-    // player has some baseline skill (i > 10), and never share a ring with a
-    // pickup or ride on a double-gap ring (ambiguous which gap it's in).
-    let pickup = null, hazard = null;
-    let hazardAmp = 0, hazardSpeed = 0;
+    // Pickups live inside the gap itself, so collecting one means actually
+    // landing the jump. Breather rings guarantee a pickup as a reward for
+    // surviving to that checkpoint.
+    let pickup = null;
 
     if(isBreather){
       pickup = (Math.floor(i/10) % 2 === 0) ? 'shield' : 'slowmo';
-    } else if(gapCount === 1){
-      if(i > 10 && Math.random() < 0.12){
-        hazard = 'drifter';
-        hazardAmp = gapWidth * 0.28;
-        hazardSpeed = 1.0 + Math.random()*1.3;
-      } else if(i > 3 && Math.random() < 0.09){
-        pickup = Math.random() < 0.55 ? 'shield' : 'slowmo';
-      }
+    } else if(gapCount === 1 && i > 3 && Math.random() < 0.09){
+      pickup = Math.random() < 0.55 ? 'shield' : 'slowmo';
     }
 
     return {
@@ -820,11 +898,7 @@
       oscSpeed: oscSpeed || 0,
       oscPhase: Math.random()*TAU,
       pickup: pickup,
-      pickupCollected: false,
-      hazard: hazard,
-      hazardPhase: Math.random()*TAU,
-      hazardAmp: hazardAmp,
-      hazardSpeed: hazardSpeed
+      pickupCollected: false
     };
   }
 
@@ -835,7 +909,7 @@
   // position 0 look "new" again after every prune, flattening the whole
   // difficulty curve and making breather rings (i % 10 === 0) fire far too
   // often. This counter is never reduced, so speed, gap width, breathers,
-  // and hazard/pickup odds keep escalating for as long as the run lasts.
+  // and pickup odds keep escalating for as long as the run lasts.
   let nextRingIndex = 0;
   function pushRing(){
     rings.push(makeRing(nextRingIndex));
@@ -849,9 +923,13 @@
     ball.angle = -Math.PI/2;
     ball.ringIndex = 0;
     ball.transitioning = false;
+    ball.landT = 0;
     ball.trail = [];
     score = 0;
     streak = 0;
+    lastJumpTime = -Infinity;
+    bestStreakAtRunStart = bestStreak;
+    newBestAnnouncedThisRun = false;
     cameraOffset = rings[0].radius - FIXED_SCREEN_R;
     cameraTarget = cameraOffset;
     particles = [];
@@ -873,13 +951,6 @@
       html += `<div class="slowchip"><span class="dot"></span>${slowmoT.toFixed(1)}s</div>`;
     }
     powerRow.innerHTML = html;
-  }
-
-  // The drifter hazard's current angle in the ring's own rotating frame —
-  // it patrols back and forth inside the gap, so it must be dodged in time
-  // as well as angle.
-  function drifterLocalAngle(ring){
-    return norm(ring.gapCenter + Math.sin(ring.hazardPhase)*ring.hazardAmp);
   }
 
   function ensureRingsAhead(){
@@ -935,28 +1006,23 @@
     return Math.min(1 + steps * MULT_INCREMENT, MULT_CAP);
   }
 
-  // How close the ball's angle must be to the drifter for it to count as a hit.
-  const DRIFTER_HIT_RADIUS = 0.11;
-
   function attemptJump(){
     if(state !== 'playing') return;
     if(ball.transitioning) return;
-    const nextIdx = ball.ringIndex + 1;
+    // ensureRingsAhead() can prune already-passed rings from the front of
+    // `rings`, shifting every remaining ring's array index down and
+    // adjusting ball.ringIndex to match. nextIdx must be read AFTER that
+    // shift, not before — otherwise it points at a stale array position
+    // and this jump gets checked against the wrong ring entirely.
     ensureRingsAhead();
+    const nextIdx = ball.ringIndex + 1;
     const nextRing = rings[nextIdx];
     const curRing = rings[ball.ringIndex];
 
     const dist = gapDistance(nextRing);
     const aligned = dist < nextRing.gapWidth/2;
 
-    let hazardHit = false;
-    if(aligned && nextRing.hazard === 'drifter'){
-      const relAngle = norm(ball.angle - nextRing.rotation);
-      const hAngle = drifterLocalAngle(nextRing);
-      if(Math.abs(angDiff(relAngle, hAngle)) < DRIFTER_HIT_RADIUS) hazardHit = true;
-    }
-
-    if(aligned && !hazardHit){
+    if(aligned){
       const perfect = isPerfectJump(nextRing, dist);
 
       ball.transitioning = true;
@@ -964,12 +1030,20 @@
       ball.tTo = nextRing.radius;
       ball.tProg = 0;
       ball.ringIndex = nextIdx;
+      const jumpNow = performance.now();
+      if(jumpNow - lastJumpTime > STREAK_WINDOW_MS) streak = 0;
+      lastJumpTime = jumpNow;
       streak++;
       const mult = getMultiplier(streak);
       const gained = Math.round((perfect ? 2 : 1) * mult);
       score += gained;
       scoreLive.textContent = score;
       streakLive.textContent = streak;
+      streakLive.classList.remove('pop');
+      void streakLive.offsetWidth;
+      streakLive.classList.add('pop');
+      streakBarFill.style.width = '100%';
+      streakBarFill.classList.remove('warn');
       multLive.textContent = mult > 1 ? ('\u00d7' + mult.toFixed(1)) : '';
       cameraTarget = nextRing.radius - FIXED_SCREEN_R;
 
@@ -988,6 +1062,11 @@
         spawnPopup(ball._sx, ball._sy - 40, 'COMBO \u00d7' + mult.toFixed(1), '#33e6cc');
         vibrate([10, 30, 10]);
       }
+      if(bestStreakAtRunStart > 0 && streak > bestStreakAtRunStart && !newBestAnnouncedThisRun){
+        newBestAnnouncedThisRun = true;
+        spawnPopup(ball._sx, ball._sy - 54, 'NEW BEST STREAK!', '#ffd166');
+        vibrate([10, 20, 10]);
+      }
 
       if(nextRing.pickup && !nextRing.pickupCollected){
         nextRing.pickupCollected = true;
@@ -995,7 +1074,7 @@
       }
       checkStoryBeats();
     } else {
-      attemptDeath(hazardHit ? 'hazard' : 'miss');
+      attemptDeath();
     }
   }
 
@@ -1017,12 +1096,13 @@
   // Wraps a fatal event so a held shield can cancel it: the jump attempt
   // fails (streak resets, ball stays put) but the run continues instead of
   // ending outright.
-  function attemptDeath(reason){
+  function attemptDeath(){
     if(shieldCount > 0){
       shieldCount--;
       streak = 0;
       streakLive.textContent = '0';
       multLive.textContent = '';
+      streakBarFill.style.width = '0%';
       spawnBurst(ball._sx, ball._sy, '#33e6cc', 20);
       spawnPopup(ball._sx, ball._sy - 22, 'SHIELD BROKEN', '#33e6cc');
       sfxShieldBreak();
@@ -1079,6 +1159,11 @@
   }
   function sfxSlowmo(){ tone(700, 0.3, 'sine', 0.1, 220); }
   function sfxShieldBreak(){ tone(700, 0.18, 'sawtooth', 0.13, 180); }
+  function sfxChapter(){
+    tone(440, 0.22, 'sine', 0.1);
+    tone(660, 0.28, 'sine', 0.11, null, 0.09);
+    tone(880, 0.4, 'sine', 0.09, null, 0.19);
+  }
 
   function spawnBurst(x,y,color,n){
     for(let i=0;i<n;i++){
@@ -1107,6 +1192,7 @@
     sfxDeath();
     vibrate([40, 30, 40]);
     flashEl.style.transition = 'none';
+    flashEl.style.background = 'var(--danger)';
     flashEl.style.opacity = '0.55';
     requestAnimationFrame(()=>{
       flashEl.style.transition = 'opacity 0.4s ease';
@@ -1130,6 +1216,7 @@
       const ep = epilogueFor(chapterReached);
       epilogueText.innerHTML = `<span class="chLabel">${ep.label}</span>${ep.text}`;
       endScreen.classList.remove('hidden');
+      pauseBtn.classList.remove('show');
       hud.style.opacity = '0';
     }, 550);
   }
@@ -1147,11 +1234,12 @@
 
   let powerRowDirty = 0;
   function update(dt){
+    if(state === 'paused') return;
     applyStoryAtmosphere(dt);
 
-    // Slow-Mo dilates gameplay time (ring spin, gap drift, hazard motion, and
-    // the ball's own orbit) without touching camera/particle/UI timers, which
-    // stay real-time so the game still feels responsive while it's active.
+    // Slow-Mo dilates gameplay time (ring spin, gap drift, and the ball's
+    // own orbit) without touching camera/particle/UI timers, which stay
+    // real-time so the game still feels responsive while it's active.
     const gdt = dt * (slowmoT > 0 ? SLOWMO_FACTOR : 1);
 
     for(const r of rings){
@@ -1159,9 +1247,6 @@
       if(r.oscillates){
         r.oscPhase += gdt * r.oscSpeed;
         r.gapCenter = norm(r.baseGapCenter + Math.sin(r.oscPhase)*r.oscAmp);
-      }
-      if(r.hazard === 'drifter'){
-        r.hazardPhase += gdt * r.hazardSpeed;
       }
     }
 
@@ -1171,12 +1256,30 @@
         if(ball.tProg >= 1){
           ball.tProg = 1;
           ball.transitioning = false;
+          ball.landT = 1;
         }
       } else {
         const ring = rings[ball.ringIndex];
         ball.angle = norm(ball.angle + ring.speed*gdt);
       }
+      // The streak is "consecutive jumps within 3s of each other" — if that
+      // window lapses without a jump, break it immediately rather than
+      // waiting for the next jump to notice.
+      if(streak > 0){
+        const remaining = STREAK_WINDOW_MS - (performance.now() - lastJumpTime);
+        if(remaining <= 0){
+          streak = 0;
+          streakLive.textContent = '0';
+          multLive.textContent = '';
+          streakBarFill.style.width = '0%';
+        } else {
+          const frac = remaining / STREAK_WINDOW_MS;
+          streakBarFill.style.width = (frac*100) + '%';
+          streakBarFill.classList.toggle('warn', frac < 0.3);
+        }
+      }
     }
+    if(ball.landT > 0) ball.landT = Math.max(0, ball.landT - dt/0.18);
 
     if(slowmoT > 0){
       slowmoT = Math.max(0, slowmoT - dt);
@@ -1237,6 +1340,21 @@
 
     // stars
     const time = performance.now()/1000;
+
+    // nebula blobs — soft, slow, tinted toward the current chapter's accent
+    const nebAccent = TIER_ACCENT[Math.max(0, Math.min(8, Math.round(storyTierAnim)))];
+    for(const n of nebulae){
+      n.x = ((n.x + n.driftX*0.001) % 1 + 1) % 1;
+      n.y = ((n.y + n.driftY*0.001) % 1 + 1) % 1;
+      const bx2 = n.x*W, by2 = n.y*H;
+      const br2 = n.r*Math.max(W,H);
+      const pulse = 0.7 + 0.3*Math.sin(time*0.15 + n.phase);
+      const grad = ctx.createRadialGradient(bx2,by2,0,bx2,by2,br2);
+      grad.addColorStop(0, `rgba(${nebAccent[0]},${nebAccent[1]},${nebAccent[2]},${0.05*pulse})`);
+      grad.addColorStop(1, `rgba(${nebAccent[0]},${nebAccent[1]},${nebAccent[2]},0)`);
+      ctx.fillStyle = grad;
+      ctx.fillRect(bx2-br2, by2-br2, br2*2, br2*2);
+    }
     const starTint = toRgbStr(lerpArr(STAR_COOL, STAR_WARM, Math.min(1, storyTierAnim/8)));
     ctx.save();
     for(const s of stars){
@@ -1300,12 +1418,23 @@
     }
 
     if(state !== 'dead' || deathT < 0.5){
+      let sx = 1, sy = 1;
+      if(ball.transitioning){
+        const s = Math.sin(Math.min(1,ball.tProg)*Math.PI) * 0.4;
+        sx = 1+s; sy = 1-s*0.5;
+      } else if(ball.landT > 0){
+        const s = ball.landT*0.35;
+        sx = 1+s; sy = 1-s*0.6;
+      }
       ctx.save();
+      ctx.translate(bx, by);
+      ctx.rotate(ball.angle);
+      ctx.scale(sx, sy);
       ctx.shadowColor = 'rgba(255,209,102,0.9)';
       ctx.shadowBlur = 22;
       ctx.fillStyle = '#ffd166';
       ctx.beginPath();
-      ctx.arc(bx, by, 9, 0, TAU);
+      ctx.arc(0, 0, 9, 0, TAU);
       ctx.fill();
       ctx.restore();
     }
@@ -1497,25 +1626,6 @@
       }
       ctx.restore();
     }
-
-    // drifter hazard: a small shard patrolling inside the gap that must be
-    // dodged even when the ball's timing/angle would otherwise clear it
-    if(ring.hazard === 'drifter'){
-      const hAngle = drifterLocalAngle(ring) + ring.rotation;
-      const hx = cx + Math.cos(hAngle)*sr, hy = cy + Math.sin(hAngle)*sr;
-      ctx.save();
-      ctx.globalAlpha = 0.5 + relOpacity*0.5;
-      ctx.translate(hx, hy);
-      ctx.rotate(hAngle + performance.now()/1000*4);
-      ctx.fillStyle = '#ff5d73';
-      ctx.shadowColor = '#ff5d73';
-      ctx.shadowBlur = 12;
-      ctx.beginPath();
-      ctx.moveTo(0, -8); ctx.lineTo(6, 0); ctx.lineTo(0, 8); ctx.lineTo(-6, 0);
-      ctx.closePath();
-      ctx.fill();
-      ctx.restore();
-    }
   }
 
   function startCountdown(){
@@ -1524,6 +1634,7 @@
     startScreen.classList.add('hidden');
     endScreen.classList.add('hidden');
     hud.style.opacity = '0';
+    pauseBtn.classList.remove('show');
     multLive.textContent = '';
     countdownScreen.classList.remove('hidden');
 
@@ -1549,8 +1660,11 @@
   function beginPlay(){
     state = 'playing';
     hud.style.opacity = '1';
+    pauseBtn.classList.add('show');
     scoreLive.textContent = '0';
     streakLive.textContent = '0';
+    streakBarFill.style.width = '0%';
+    streakBarFill.classList.remove('warn');
     bestLive.textContent = highScore;
   }
 
@@ -1596,6 +1710,37 @@
   logCloseBtn.addEventListener('click', (e)=>{
     e.stopPropagation();
     logScreen.classList.add('hidden');
+  });
+
+  pauseBtn.addEventListener('click', (e)=>{
+    e.stopPropagation();
+    if(state !== 'playing') return;
+    state = 'paused';
+    pauseScreen.classList.remove('hidden');
+    pauseBtn.classList.remove('show');
+  });
+  resumeBtn.addEventListener('click', (e)=>{
+    e.stopPropagation();
+    if(state !== 'paused') return;
+    state = 'playing';
+    pauseScreen.classList.add('hidden');
+    pauseBtn.classList.add('show');
+  });
+  quitBtn.addEventListener('click', (e)=>{
+    e.stopPropagation();
+    state = 'menu';
+    pauseScreen.classList.add('hidden');
+    pauseBtn.classList.remove('show');
+    hud.style.opacity = '0';
+    resetGame();
+    startScreen.classList.remove('hidden');
+  });
+  document.addEventListener('visibilitychange', ()=>{
+    if(document.hidden && state === 'playing'){
+      state = 'paused';
+      pauseScreen.classList.remove('hidden');
+      pauseBtn.classList.remove('show');
+    }
   });
 
   resetGame();
